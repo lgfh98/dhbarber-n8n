@@ -24,8 +24,11 @@ services:
       - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
       - TZ=America/Argentina/Buenos_Aires
       - N8N_DEFAULT_BINARY_DATA_MODE=default
-      - EXECUTIONS_DATA_PRUNE=true
-      - EXECUTIONS_DATA_MAX_AGE=72
+      - N8N_LOG_LEVEL=debug
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      - EXECUTIONS_DATA_PRUNE=false
       - N8N_SECURE_COOKIE=false
     extra_hosts:
       - "host.docker.internal:host-gateway"

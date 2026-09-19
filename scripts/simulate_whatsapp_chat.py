@@ -107,7 +107,14 @@ def main():
                 print(f"⚠️ Error al conectar con n8n ({url}): {body}")
                 print("Asegúrate de que n8n esté corriendo en el puerto 5678 y el workflow esté activo.\n")
             elif status in (200, 201):
-                print(f"✅ Evento entregado a n8n (HTTP {status})")
+                try:
+                    res_json = json.loads(body)
+                    if "responseText" in res_json:
+                        print(f"\n[Bot Peluquería 💈]:\n{res_json['responseText']}\n")
+                    else:
+                        print(f"✅ Evento entregado a n8n: {body}\n")
+                except Exception:
+                    print(f"✅ Evento entregado a n8n: {body}\n")
             else:
                 print(f"⚠️ n8n respondió con HTTP {status}: {body}\n")
 

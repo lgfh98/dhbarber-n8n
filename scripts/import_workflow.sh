@@ -21,4 +21,7 @@ docker cp "$WORKFLOW_FILE" dhbarber-n8n:/tmp/dhbarber_whatsapp_workflow.json
 echo "Importando workflow en n8n..."
 docker exec -u node dhbarber-n8n n8n import:workflow --input=/tmp/dhbarber_whatsapp_workflow.json
 
-echo "¡Workflow importado con éxito en n8n!"
+echo "Publicando y activando workflow..."
+docker exec -u node dhbarber-n8n n8n publish:workflow --id=WfBarberAssist01
+
+echo "¡Workflow importado y publicado con éxito en n8n!"

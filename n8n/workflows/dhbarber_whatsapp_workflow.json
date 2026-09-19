@@ -1,10 +1,12 @@
 {
+  "id": "WfBarberAssist01",
   "name": "DHBarber WhatsApp Assistant",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "whatsapp",
+        "responseMode": "responseNode",
         "options": {}
       },
       "id": "webhook-whatsapp-inbound",
@@ -16,7 +18,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\n// Verificar si es un mensaje entrante de Meta Cloud API\nconst entry = body.entry?.[0];\nconst change = entry?.changes?.[0]?.value;\nconst messages = change?.messages;\n\nif (!messages || messages.length === 0) {\n  return []; // Evento de status o entrega, no mensaje de texto/interactivo\n}\n\nconst msg = messages[0];\nconst contact = change.contacts?.[0];\nconst senderPhone = msg.from; // Ej: 5491155551234\nconst senderName = contact?.profile?.name || 'Cliente';\n\n// Extraer texto o respuesta de boton/lista interactiva\nlet userText = '';\nlet interactiveId = '';\n\nif (msg.type === 'text') {\n  userText = msg.text.body.trim();\n} else if (msg.type === 'interactive') {\n  if (msg.interactive.type === 'button_reply') {\n    interactiveId = msg.interactive.button_reply.id;\n    userText = msg.interactive.button_reply.title;\n  } else if (msg.interactive.type === 'list_reply') {\n    interactiveId = msg.interactive.list_reply.id;\n    userText = msg.interactive.list_reply.title;\n  }\n}\n\nreturn [{\n  json: {\n    senderPhone,\n    senderName,\n    userText,\n    interactiveId,\n    rawType: msg.type,\n    timestamp: msg.timestamp\n  }\n}];"
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\n// Verificar si es un mensaje entrante de Meta Cloud API\nconst entry = body.entry?.[0];\nconst change = entry?.changes?.[0]?.value;\nconst messages = change?.messages;\n\nif (!messages || messages.length === 0) {\n  return []; // Evento de status o entrega, no mensaje\n}\n\nconst msg = messages[0];\nconst contact = change.contacts?.[0];\nconst senderPhone = msg.from; // Ej: 5491155551234\nconst senderName = contact?.profile?.name || 'Cliente';\n\nlet userText = '';\nlet interactiveId = '';\n\nif (msg.type === 'text') {\n  userText = (msg.text?.body || '').trim();\n} else if (msg.type === 'interactive') {\n  if (msg.interactive.type === 'button_reply') {\n    interactiveId = msg.interactive.button_reply.id;\n    userText = msg.interactive.button_reply.title;\n  } else if (msg.interactive.type === 'list_reply') {\n    interactiveId = msg.interactive.list_reply.id;\n    userText = msg.interactive.list_reply.title;\n  }\n}\n\nreturn [{\n  json: {\n    senderPhone,\n    senderName,\n    userText,\n    interactiveId,\n    rawType: msg.type,\n    timestamp: msg.timestamp\n  }\n}];"
       },
       "id": "code-parse-message",
       "name": "Parse Incoming Message",
@@ -27,18 +29,26 @@
     {
       "parameters": {
         "operation": "get",
-        "key": "={{ 'session:' + $json.senderPhone }}"
+        "propertyName": "sessionData",
+        "key": "={{ 'session:' + $json.senderPhone }}",
+        "keyType": "string"
       },
       "id": "redis-get-session",
       "name": "Redis Get Session",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [640, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-dhbarber",
+          "name": "Redis DHBarber"
+        }
+      },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const incoming = $('Parse Incoming Message').first().json;\nconst redisResult = $input.first().json;\n\nlet session = {\n  state: 'IDLE',\n  barberId: null,\n  barberName: null,\n  serviceIds: [],\n  serviceName: null,\n  durationMinutes: 30,\n  startTime: null,\n  customerId: incoming.senderName.toLowerCase().replace(/\\s+/g, '-'),\n  customerPhone: '+' + incoming.senderPhone\n};\n\ntry {\n  if (redisResult && redisResult.value) {\n    session = Object.assign(session, JSON.parse(redisResult.value));\n  }\n} catch (e) {\n  // Sesión corrupta o expirada, reiniciar\n}\n\nconst text = (incoming.userText || '').toLowerCase();\nconst actionId = incoming.interactiveId || '';\n\n// Comandos globales de reinicio\nif (text === 'hola' || text === 'inicio' || text === 'menu' || text === 'cancelar' || text === 'reiniciar') {\n  session.state = 'IDLE';\n  session.barberId = null;\n  session.serviceIds = [];\n}\n\nreturn [{\n  json: {\n    ...incoming,\n    session,\n    actionId,\n    normalizedText: text\n  }\n}];"
+        "jsCode": "const rawInput = $('Parse Incoming Message').first().json;\nconst redisResult = $input.first().json;\n\nlet session = {\n  state: 'IDLE',\n  barberId: null,\n  barberName: null,\n  serviceIds: [],\n  serviceName: null,\n  durationMinutes: 30,\n  startTime: null,\n  customerId: (rawInput.senderName || 'cliente').toLowerCase().replace(/\\s+/g, '-'),\n  customerPhone: '+' + rawInput.senderPhone\n};\n\nif (redisResult && redisResult.sessionData) {\n  try {\n    const parsed = typeof redisResult.sessionData === 'string' ? JSON.parse(redisResult.sessionData) : redisResult.sessionData;\n    session = Object.assign(session, parsed);\n  } catch (e) {}\n}\n\nconst text = (rawInput.userText || '').toLowerCase();\nconst actionId = rawInput.interactiveId || '';\n\nif (text === 'hola' || text === 'inicio' || text === 'menu' || text === 'cancelar' || text === 'reiniciar') {\n  session.state = 'IDLE';\n  session.barberId = null;\n  session.serviceIds = [];\n}\n\nreturn [{\n  json: {\n    ...rawInput,\n    session,\n    actionId,\n    normalizedText: text\n  }\n}];"
       },
       "id": "code-state-manager",
       "name": "Session State Manager",
@@ -48,29 +58,9 @@
     },
     {
       "parameters": {
-        "dataType": "string",
-        "value1": "={{ $json.session.state }}",
-        "rules": {
-          "rules": [
-            {
-              "value2": "IDLE",
-              "output": 0
-            },
-            {
-              "value2": "WAITING_BARBER",
-              "output": 1
-            },
-            {
-              "value2": "WAITING_SERVICE",
-              "output": 2
-            },
-            {
-              "value2": "WAITING_DATETIME",
-              "output": 3
-            }
-          ]
-        },
-        "fallbackOutput": 0
+        "mode": "expression",
+        "output": "={{ $json.session?.state === 'WAITING_BARBER' ? 1 : ($json.session?.state === 'WAITING_SERVICE' ? 2 : ($json.session?.state === 'WAITING_DATETIME' ? 3 : 0)) }}",
+        "numberOutputs": 4
       },
       "id": "switch-conversational-router",
       "name": "Router Conversacional",
@@ -91,7 +81,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const barbers = $input.all().map(i => i.json);\nconst incoming = $('Session State Manager').first().json;\n\nlet barberListText = '👋 ¡Hola *' + incoming.senderName + '*! Bienvenido a *Peluquería Daniel* 💈\\n\\n¿Con qué barbero te gustaría atenderte?\\n\\n';\n\nbarbers.forEach((b, idx) => {\n  barberListText += `${idx + 1}. *${b.fullName}* (${b.specialty})\\n`;\n});\n\nbarberListText += '\\n👉 Responde con el número o nombre de tu barbero favorito.';\n\nconst nextSession = {\n  ...incoming.session,\n  state: 'WAITING_BARBER',\n  availableBarbers: barbers.map(b => ({ id: b.id, name: b.fullName }))\n};\n\nreturn [{\n  json: {\n    senderPhone: incoming.senderPhone,\n    responseText: barberListText,\n    nextSession\n  }\n}];"
+        "jsCode": "const barbers = $input.all().map(i => i.json);\nconst incoming = $('Session State Manager').first().json;\n\nlet barberListText = '👋 ¡Hola *' + incoming.senderName + '*! Bienvenido a *Peluquería Daniel* 💈\\n\\n¿Con qué barbero te gustaría atenderte?\\n\\n';\n\nbarbers.forEach((b, idx) => {\n  barberListText += `${idx + 1}. *${b.fullName}* (${b.specialty})\\n`;\n});\n\nbarberListText += '\\n👉 Responde con el número (1, 2 o 3) de tu barbero favorito.';\n\nconst nextSession = {\n  ...incoming.session,\n  state: 'WAITING_BARBER',\n  availableBarbers: barbers.map(b => ({ id: b.id, name: b.fullName }))\n};\n\nreturn [{\n  json: {\n    senderPhone: incoming.senderPhone,\n    responseText: barberListText,\n    nextSession\n  }\n}];"
       },
       "id": "code-build-welcome-menu",
       "name": "Build Welcome & Barbers Menu",
@@ -111,7 +101,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst text = data.normalizedText;\n\nlet serviceIds = [];\nlet serviceName = '';\nlet durationMinutes = 30;\n\nif (text === '1' || text.includes('fade') || text.includes('corte')) {\n  serviceIds = ['corte-fade'];\n  serviceName = 'Corte Fade / Degradé';\n  durationMinutes = 45;\n} else if (text === '2' || text.includes('barba')) {\n  serviceIds = ['perfilado-barba'];\n  serviceName = 'Perfilado de Barba';\n  durationMinutes = 30;\n} else if (text === '3' || text.includes('combo')) {\n  serviceIds = ['corte-fade', 'perfilado-barba'];\n  serviceName = 'Combo Fade + Barba';\n  durationMinutes = 75;\n} else {\n  return [{\n    json: {\n      senderPhone: data.senderPhone,\n      responseText: '⚠️ Opción de servicio no válida. Por favor escribe 1 (Corte), 2 (Barba) o 3 (Combo).',\n      nextSession: data.session\n    }\n  }];\n}\n\nconst promptDateTime = `💈 Perfecto: *${serviceName}* (${durationMinutes} min) con *${data.session.barberName}*.\\n\\n` +\n  `📅 Ahora, por favor ingresa la fecha y hora que deseas para tu turno.\\n` +\n  `Formato recomendado: *AAAA-MM-DD HH:mm*\\n` +\n  `Ejemplo: *2026-11-20 16:00*\\n\\n` +\n  `_Nota: Atendemos de Lunes a Sábados de 08:00 a 21:00 hs._`;\n\nconst nextSession = {\n  ...data.session,\n  state: 'WAITING_DATETIME',\n  serviceIds,\n  serviceName,\n  durationMinutes\n};\n\nreturn [{\n  json: {\n    senderPhone: data.senderPhone,\n    responseText: promptDateTime,\n    nextSession\n  }\n}];"
+        "jsCode": "const data = $input.first().json;\nconst text = data.normalizedText;\n\nlet serviceIds = [];\nlet serviceName = '';\nlet durationMinutes = 30;\n\nif (text === '1' || text.includes('fade') || text.includes('corte')) {\n  serviceIds = ['corte-fade'];\n  serviceName = 'Corte Fade / Degradé';\n  durationMinutes = 45;\n} else if (text === '2' || text.includes('barba')) {\n  serviceIds = ['perfilado-barba'];\n  serviceName = 'Perfilado de Barba';\n  durationMinutes = 30;\n} else if (text === '3' || text.includes('combo')) {\n  serviceIds = ['corte-fade', 'perfilado-barba'];\n  serviceName = 'Combo Fade + Barba';\n  durationMinutes = 75;\n} else {\n  return [{\n    json: {\n      senderPhone: data.senderPhone,\n      responseText: '⚠️ Opción de servicio no válida. Por favor escribe 1 (Corte), 2 (Barba) o 3 (Combo).',\n      nextSession: data.session\n    }\n  }];\n}\n\nconst promptDateTime = `💈 Perfecto: *${serviceName}* (${durationMinutes} min) con *${data.session.barberName}*.\\n\\n` +\n  `📅 Ahora, por favor ingresa la fecha y hora que deseas para tu turno.\\n` +\n  `Formato: *AAAA-MM-DD HH:mm*\\n` +\n  `Ejemplo: *2026-11-20 16:00*\\n\\n` +\n  `_Nota: Atendemos de Lunes a Sábados de 08:00 a 21:00 hs._`;\n\nconst nextSession = {\n  ...data.session,\n  state: 'WAITING_DATETIME',\n  serviceIds,\n  serviceName,\n  durationMinutes\n};\n\nreturn [{\n  json: {\n    senderPhone: data.senderPhone,\n    responseText: promptDateTime,\n    nextSession\n  }\n}];"
       },
       "id": "code-process-service-selection",
       "name": "Process Service Selection",
@@ -121,7 +111,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nlet rawInput = data.userText.trim();\n\n// Normalizar separadores y validar formato de fecha y hora\n// Soporta '2026-11-20 16:00' o '2026-11-20T16:00:00'\nlet cleanDateStr = rawInput.replace(/\\//g, '-').replace(' ', 'T');\nif (cleanDateStr.length === 16) {\n  cleanDateStr += ':00';\n}\n\nconst parsed = new Date(cleanDateStr);\nif (isNaN(parsed.getTime())) {\n  return [{\n    json: {\n      isValid: false,\n      senderPhone: data.senderPhone,\n      responseText: '❌ Formato de fecha y hora inválido. Usa el formato *AAAA-MM-DD HH:mm* (Ej: *2026-11-20 16:00*).',\n      nextSession: data.session\n    }\n  }];\n}\n\nconst payload = {\n  barberId: data.session.barberId,\n  customerId: data.session.customerId || 'cliente-whatsapp',\n  customerPhone: data.session.customerPhone,\n  serviceIds: data.session.serviceIds,\n  startTime: cleanDateStr,\n  durationMinutes: data.session.durationMinutes\n};\n\nreturn [{\n  json: {\n    isValid: true,\n    senderPhone: data.senderPhone,\n    payload,\n    session: data.session\n  }\n}];"
+        "jsCode": "const data = $input.first().json;\nlet rawInput = data.userText.trim();\n\nlet cleanDateStr = rawInput.replace(/\\//g, '-').replace(' ', 'T');\nif (cleanDateStr.length === 16) {\n  cleanDateStr += ':00';\n}\n\nconst parsed = new Date(cleanDateStr);\nif (isNaN(parsed.getTime())) {\n  return [{\n    json: {\n      isValid: false,\n      senderPhone: data.senderPhone,\n      responseText: '❌ Formato de fecha y hora inválido. Usa el formato *AAAA-MM-DD HH:mm* (Ej: *2026-11-20 16:00*).',\n      nextSession: data.session\n    }\n  }];\n}\n\nconst payload = {\n  barberId: data.session.barberId,\n  customerId: data.session.customerId || 'cliente-whatsapp',\n  customerPhone: data.session.customerPhone,\n  serviceIds: data.session.serviceIds,\n  startTime: cleanDateStr,\n  durationMinutes: data.session.durationMinutes\n};\n\nreturn [{\n  json: {\n    isValid: true,\n    senderPhone: data.senderPhone,\n    payload,\n    session: data.session\n  }\n}];"
       },
       "id": "code-validate-appointment",
       "name": "Validator & Payload Builder",
@@ -153,7 +143,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const res = $input.first().json;\nconst prev = $('Validator & Payload Builder').first().json;\nconst statusCode = res.statusCode || 200;\nconst body = res.body || {};\n\nif (statusCode === 201 || (body.id && body.status === 'SCHEDULED')) {\n  const confirmMsg = `🎉 *¡TURNO CONFIRMADO CON ÉXITO!* 🎉\\n\\n` +\n    `💈 *Peluquería Daniel*\\n` +\n    `👤 *Cliente:* ${prev.session.customerId}\\n` +\n    `✂️ *Servicio:* ${prev.session.serviceName}\\n` +\n    `👨‍🎨 *Barbero:* ${prev.session.barberName}\\n` +\n    `📅 *Fecha y Hora:* ${body.startTime.replace('T', ' ')} hs\\n` +\n    `⏱️ *Duración estimada:* ${body.durationMinutes} minutos\\n` +\n    `🆔 *Código de Cita:* ${body.id}\\n\\n` +\n    `¡Te esperamos con la mejor atención! 💈✨\\n` +\n    `_Escribe 'menu' en cualquier momento si deseas agendar otra cita._`;\n\n  return [{\n    json: {\n      senderPhone: prev.senderPhone,\n      responseText: confirmMsg,\n      nextSession: { state: 'IDLE' }\n    }\n  }];\n} else {\n  // Manejo de RFC 9457 ProblemDetail devuelto por Spring Boot\n  const errorDetail = body.detail || 'No se pudo reservar el turno en el horario solicitado.';\n  const errorMsg = `⚠️ *No fue posible agendar tu turno:*\\n\\n👉 ${errorDetail}\\n\\nPor favor ingresa otro horario (Ej: *2026-11-20 17:00*):`;\n\n  return [{\n    json: {\n      senderPhone: prev.senderPhone,\n      responseText: errorMsg,\n      nextSession: prev.session // Mantiene el estado en WAITING_DATETIME para reintentar\n    }\n  }];\n}"
+        "jsCode": "const res = $input.first().json;\nconst prev = $('Validator & Payload Builder').first().json;\nconst statusCode = res.statusCode || 200;\nconst body = res.body || {};\n\nif (statusCode === 201 || (body.id && body.status === 'SCHEDULED')) {\n  const confirmMsg = `🎉 *¡TURNO CONFIRMADO CON ÉXITO!* 🎉\\n\\n` +\n    `💈 *Peluquería Daniel*\\n` +\n    `👤 *Cliente:* ${prev.session.customerId}\\n` +\n    `✂️ *Servicio:* ${prev.session.serviceName}\\n` +\n    `👨‍🎨 *Barbero:* ${prev.session.barberName}\\n` +\n    `📅 *Fecha y Hora:* ${body.startTime.replace('T', ' ')} hs\\n` +\n    `⏱️ *Duración estimada:* ${body.durationMinutes} minutos\\n` +\n    `🆔 *Código de Cita:* ${body.id}\\n\\n` +\n    `¡Te esperamos con la mejor atención! 💈✨\\n` +\n    `_Escribe 'menu' en cualquier momento si deseas agendar otra cita._`;\n\n  return [{\n    json: {\n      senderPhone: prev.senderPhone,\n      responseText: confirmMsg,\n      nextSession: { state: 'IDLE' }\n    }\n  }];\n} else {\n  const errorDetail = body.detail || 'No se pudo reservar el turno en el horario solicitado.';\n  const errorMsg = `⚠️ *No fue posible agendar tu turno:*\\n\\n👉 ${errorDetail}\\n\\nPor favor ingresa otro horario (Ej: *2026-11-20 17:00*):`;\n\n  return [{\n    json: {\n      senderPhone: prev.senderPhone,\n      responseText: errorMsg,\n      nextSession: prev.session\n    }\n  }];\n}"
       },
       "id": "code-format-booking-result",
       "name": "Format Booking Result",
@@ -165,47 +155,33 @@
       "parameters": {
         "operation": "set",
         "key": "={{ 'session:' + $json.senderPhone }}",
+        "keyType": "string",
         "value": "={{ JSON.stringify($json.nextSession) }}",
-        "expire": 1800
+        "valueIsJSON": false,
+        "expire": true,
+        "ttl": 1800
       },
       "id": "redis-save-session",
       "name": "Redis Save Session",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
-      "position": [2100, 300]
+      "position": [2100, 300],
+      "credentials": {
+        "redis": {
+          "id": "redis-dhbarber",
+          "name": "Redis DHBarber"
+        }
+      }
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=https://graph.facebook.com/v21.0/{{ $env.META_PHONE_NUMBER_ID || 'MOCK_PHONE_ID' }}/messages",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.META_ACCESS_TOKEN || 'MOCK_TOKEN' }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  messaging_product: 'whatsapp',\n  to: $json.senderPhone,\n  type: 'text',\n  text: { body: $json.responseText }\n}) }}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          }
-        }
+        "options": {},
+        "responseBody": "={{ JSON.stringify({ status: 'ok', senderPhone: $json.senderPhone, responseText: $json.responseText }) }}"
       },
-      "id": "http-outbound-meta",
-      "name": "Outbound Meta WhatsApp",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
       "position": [2320, 300]
     }
   ],
@@ -367,7 +343,7 @@
       "main": [
         [
           {
-            "node": "Outbound Meta WhatsApp",
+            "node": "Respond to Webhook",
             "type": "main",
             "index": 0
           }
